@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>工单列表</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 40px; background: #f5f6f8; }
+    h1 { color: #333; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { padding: 10px 14px; border-bottom: 1px solid #eee; text-align: left; }
+    th { background: #fafafa; font-weight: 600; }
+    .status { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+    .pending  { background: #fff3cd; color: #856404; }
+    .approved { background: #d4edda; color: #155724; }
+    #error { color: #c00; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>工单列表</h1>
+  <!-- ★ 登录区：没登录时显示，登录后隐藏 -->
+  <div id="loginBox">
+    <input id="username" placeholder="用户名（zhangsan / lisi）" />
+    <input id="password" type="password" placeholder="密码（123456）" />
+    <button onclick="login()">登录</button>
+    <div id="loginMsg"></div>
+  </div>
+
+  <!-- ★ 登录后才显示的工单区 -->
+  <div id="ticketArea" style="display:none">
+    <p>当前用户：<b id="whoami"></b> <button onclick="logout()">退出</button></p>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>标题</th><th>状态</th><th>提交人</th><th>创建时间</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <div id="error"></div>
+
+  <script>
+    const API = 'http://127.0.0.1:8000';
+
+    // ---------- ★ 登录 ----------
+    async function login() {
+      const msg = document.getElementById('loginMsg');
+      try {
+        const resp = await fetch(`${API}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+
+        const result = await resp.json();
+        // ★ localStorage：浏览器的"小储物柜"，关掉浏览器数据还在
+        localStorage.setItem('token', result.data.token);
+        localStorage.setItem('user', JSON.stringify(result.data.user));
+
+        enterSystem();
+      } catch (err) {
+        msg.textContent = '登录失败：' + err.message;
+      }
+    }
+
+    // ---------- ★ 之后每个请求都要带 token ----------
+    async function loadTickets() {
+      const errorBox = document.getElementById('error');
+      errorBox.textContent = '';
+      try {
+        const resp = await fetch(`${API}/api/tickets?page=1&size=20`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('token')}`,   // ★ 就是这一行
+          },
+        });
+        if (!resp.ok) {
+          if (resp.status === 401) { logout(); throw new Error('登录已过期，请重新登录'); }
+          throw new Error(`请求失败：HTTP ${resp.status}`);
+        }
+        const result = await resp.json();
+        render(result.data.items);
+      } catch (err) {
+        errorBox.textContent = '加载失败：' + err.message;
+      }
+    }
+
+    // ---------- ★ 界面切换 ----------
+    function enterSystem() {
+      document.getElementById('loginBox').style.display = 'none';
+      document.getElementById('ticketArea').style.display = '';
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      document.getElementById('whoami').textContent = `${user.username}（${user.role}）`;
+      loadTickets();
+    }
+
+    function logout() {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      location.reload();
+    }
+
+    // ---------- 渲染（和之前一样） ----------
+    function render(items) {
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      if (!items || items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5">暂无数据</td></tr>';
+        return;
+      }
+      const STATUS_MAP = { pending: '待审批', approved: '已通过', rejected: '已驳回', closed: '已关闭' };
+      for (const t of items) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${t.id}</td>
+          <td>${escapeHtml(t.title)}</td>
+          <td><span class="status ${t.status}">${STATUS_MAP[t.status] || t.status}</span></td>
+          <td>${escapeHtml(t.submitter)}</td>
+          <td>${t.created_at}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function escapeHtml(str) {
+      if (str == null) return '';
+      return String(str).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    // ★ 页面打开时：如果之前登录过（localStorage 里有 token），直接进入系统
+    if (localStorage.getItem('token')) enterSystem();
+  </script>
+
+
+</body>
+</html>
