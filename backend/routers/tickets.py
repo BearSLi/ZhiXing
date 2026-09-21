@@ -38,8 +38,6 @@ def list_tickets(
     except Exception as e:
         logger.exception("查询工单列表失败")      # ← 会把完整堆栈打到 uvicorn 窗口
         raise HTTPException(status_code=500, detail="查询失败，请查看服务端日志")
-    finally:
-        conn.close()
 
 @router.post("", status_code=201)
 def create_ticket(payload: TicketCreate, 

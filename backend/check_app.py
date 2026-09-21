@@ -17,4 +17,3 @@ cur.execute("""
 
 for row in cur.fetchall():
     print(row)
-conn.close()

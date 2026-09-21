@@ -36,5 +36,4 @@ cur.executemany(
 )
 
 conn.commit()
-conn.close()
 print("假数据插入完成")

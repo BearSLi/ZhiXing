@@ -66,6 +66,14 @@ def create_ticket(conn, payload: TicketCreate, current_user: dict):
            VALUES (?, ?, 'pending', ?, ?)""",
         (payload.title, payload.content, current_user["id"], now),   # ← 用 token 里的人
     )
+    ticket_id = cur.lastrowid
+    conn.execute(
+        """INSERT INTO ticket_logs (ticket_id, action, operator_id, created_at)
+           VALUES (?, 'submit', ?, ?)""",
+        (ticket_id, current_user["id"], now),
+    )
+    conn.commit()          
+    return ticket_id 
 
 def approve_ticket(conn, ticket_id: int, action: str, operator: dict, remark: str = None):
     ticket = conn.execute(

@@ -4,9 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import tickets, auth
 import logging
 
+from routers import ai, auth, tickets
+
+
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="工单系统 API", version="0.2.0")
 app.include_router(auth.router)
+app.include_router(ai.router)
 
 # ⚠️ 加在 include_router 之前
 app.add_middleware(

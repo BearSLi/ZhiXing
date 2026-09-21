@@ -13,4 +13,3 @@ for username in ("zhangsan", "lisi", "wangwu"):
     print(f"{username} 的密码已设置为 123456")
 
 conn.commit()
-conn.close()

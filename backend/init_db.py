@@ -49,6 +49,6 @@ CREATE TABLE IF NOT EXISTS ticket_logs (
 """)
 
 conn.commit()
-conn.close()
+
 print("建表完成，数据库文件：app.db")
 
