@@ -1,0 +1,32 @@
+# ============================================================
+#  .gitattributes —— 钉死换行符规则，避免跨平台踩坑
+# ============================================================
+# 背景：Git for Windows 默认 core.autocrlf=true，会在检出时把 LF 换成 CRLF。
+#   这对 .sh 脚本是致命的：容器里会报
+#       /bin/sh^M: bad interpreter: No such file or directory
+#   或 exec format error，服务直接起不来。
+#   在 Windows 上写 Docker 项目，这一条必须显式声明。
+
+# 默认：由 git 自动判定文本文件并做换行归一化
+* text=auto
+
+# ── 必须保持 LF（Linux 环境执行）──
+*.sh      text eol=lf
+Dockerfile text eol=lf
+*.dockerignore text eol=lf
+Makefile  text eol=lf
+
+# ── 保持 CRLF（Windows PowerShell 执行；配合 UTF-8 BOM 才能正确读中文）──
+*.ps1     text eol=crlf
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+
+# ── 二进制文件不做任何转换 ──
+*.db      binary
+*.sqlite3 binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.zip     binary
