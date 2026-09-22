@@ -1,5 +1,7 @@
-# ===== 不进 Docker 镜像的东西 =====
-# 作用：1) 减小构建上下文（更快） 2) 防止密钥/数据泄漏进镜像
+# ============================================================
+#  .dockerignore：不进 Docker 镜像的文件
+#  作用：1) 减小构建上下文（更快） 2) 防止密钥/数据泄漏进镜像
+# ============================================================
 
 # ── 密钥与配置（必须排除！镜像会被分发，等同公开）──
 .env
@@ -18,10 +20,12 @@ __pycache__/
 .venv/
 venv/
 
-# ── 开发调试脚本（不需要在生产镜像里）──
+# ── 开发与诊断脚本（不需要在生产镜像里）──
 debug_*.py
 verify_fixes.py
 verify_all.py
+verify_new_keys.py
+check_old_key_revoked.py
 http_check.py
 check_app.py
 explore_http.py
@@ -30,9 +34,3 @@ tests/
 conftest.py
 pytest.ini
 .pytest_cache/
-
-# ── 编辑器/系统杂物 ──
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
