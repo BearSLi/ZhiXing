@@ -13,8 +13,10 @@ from fastapi.security import OAuth2PasswordBearer
 from database import get_db
 from services import auth_service
 
-# tokenUrl：告诉 /docs 去哪个接口拿 token，这样文档页会自动出现 Authorize 按钮
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# tokenUrl：告诉 /docs "去哪个接口拿 token"，这样文档页会自动出现 Authorize 按钮。
+# 必须指向 **表单式** 的 /token（不是 JSON 的 /login）——Swagger 按 OAuth2 规范发的是
+# application/x-www-form-urlencoded，指向 JSON 接口会导致 Authorize 报 422。
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), conn=Depends(get_db)) -> dict:

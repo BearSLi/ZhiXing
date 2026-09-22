@@ -92,7 +92,8 @@ token 由登录接口签发（JWT，默认有效期 12 小时），**payload 可
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
 | GET | `/` | 无 | 健康检查 |
-| POST | `/api/auth/login` | 无 | 登录换取 token |
+| POST | `/api/auth/login` | 无 | 登录换取 token（**JSON 请求体**，前端与脚本用） |
+| POST | `/api/auth/token` | 无 | 登录换取 token（**OAuth2 表单**，`/docs` 的 Authorize 按钮用） |
 | GET | `/api/tickets` | 登录 | 查询工单列表（自动按权限过滤） |
 | POST | `/api/tickets` | 登录 | 创建工单 |
 | GET | `/api/tickets/{id}` | 登录 | 查询工单详情（按权限过滤，越权返回 404） |
@@ -157,6 +158,40 @@ Content-Type: application/json
 ```
 
 **响应 401**：用户名与密码错误**返回完全相同的信息**，防止攻击者枚举有效用户名。
+
+---
+
+### 3.2b 登录（OAuth2 表单式，供 `/docs` 调试）
+
+```
+POST /api/auth/token
+Content-Type: application/x-www-form-urlencoded
+
+username=lisi&password=123456&grant_type=password
+```
+
+**响应 200**（遵循 OAuth2 规范，**不使用本项目信封**）
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer",
+  "expires_in": 43200,
+  "user": { "id": 2, "username": "lisi", "role": "manager" }
+}
+```
+
+> **为什么要两个登录接口？**
+> Swagger UI 的 **Authorize** 按钮按 OAuth2 规范发送
+> `application/x-www-form-urlencoded` **表单**，而我们的前端发的是 JSON。
+> 如果只保留 JSON 接口，点击 Authorize 会返回 422，界面显示
+> `Auth error: Unprocessable Content`——这是接口契约与客户端预期不匹配，
+> 不是服务端故障。两个入口共用同一套校验逻辑（`auth_service.authenticate`）。
+>
+> **响应形状为什么不一样？** OAuth2 规范要求顶层返回 `access_token` / `token_type`，
+> Swagger 客户端靠这两个字段提取并注入 `Authorization` 头。
+> 这一处是**协议要求**，属于信封规范之外的特例，已在代码注释里标注。
+
+**在 `/docs` 页面调试的步骤**：点右上角 Authorize → 输入 `lisi` / `123456` → Authorize → 之后所有接口自动带上 token。
 
 ---
 

@@ -9,6 +9,7 @@ PyJWT==2.14.0
 bcrypt==5.0.0
 python-dotenv==1.2.3
 openai==3.16.2
+python-multipart==0.0.32   # OAuth2 表单式 token 端点（/docs 的 Authorize 按钮）需要它解析表单
 
 # ── 开发/测试用（可选安装，容器镜像不含）──
 # pytest==8.0.0
