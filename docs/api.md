@@ -35,15 +35,37 @@ http://127.0.0.1:8000
 
 ### 1.3 错误响应格式
 
-框架层错误（鉴权、校验、业务异常）沿用 FastAPI 默认格式：
+**失败响应与成功响应使用同一种信封形状**，前端只需实现一次错误处理：
 
 ```json
-{ "detail": "用户名或密码错误" }
+{
+  "code": 403,
+  "message": "只能处理本部门的工单",
+  "detail": "只能处理本部门的工单",
+  "data": null
+}
 ```
 
-> ⚠️ **已知的不一致**：成功走信封、失败走 `detail`。这是从教学项目演进中保留的历史形态。
-> 生产建议：错误也包成 `{"code": 40001, "message": "...", "data": null}`，并统一异常处理器。
-> 记录在此而非悄悄忽略，是为了让调用方有明确预期。
+| 字段 | 说明 |
+|---|---|
+| `code` | 与 HTTP 状态码一致（业务错误码若要细分，可在此扩展如 `40001`） |
+| `message` | 统一的可读描述，前端直接展示即可 |
+| `detail` | **兼容字段**：保留是为了既有前端与脚本不必改动（契约演进：新字段先加，旧字段保留一版再删） |
+| `data` | 固定为 `null` |
+
+参数校验失败（422）时，`detail` 是字段级错误列表（沿用 FastAPI 原生结构）：
+
+```json
+{
+  "code": 422,
+  "message": "参数校验失败",
+  "detail": [{ "type": "value_error", "loc": ["body", "title"], "msg": "标题不能是空白字符" }],
+  "data": null
+}
+```
+
+> 由 `main.py` 的四个全局异常处理器统一产出：`BizError` / `HTTPException` /
+> `RequestValidationError` / 兜底 `Exception`（兜底时日志留完整堆栈，对外只给通用提示）。
 
 ### 1.4 鉴权
 
@@ -73,9 +95,21 @@ token 由登录接口签发（JWT，默认有效期 12 小时），**payload 可
 | POST | `/api/auth/login` | 无 | 登录换取 token |
 | GET | `/api/tickets` | 登录 | 查询工单列表（自动按权限过滤） |
 | POST | `/api/tickets` | 登录 | 创建工单 |
-| POST | `/api/tickets/{id}/approve` | manager/admin | 审批工单 |
+| GET | `/api/tickets/{id}` | 登录 | 查询工单详情（按权限过滤，越权返回 404） |
+| GET | `/api/tickets/{id}/logs` | 登录 | 查询工单流转历史 |
+| POST | `/api/tickets/{id}/action` | manager/admin | 工单流转：`approve` / `reject` / `close` |
+| POST | `/api/tickets/{id}/approve` | manager/admin | 审批（兼容路径，等价于 `action=approve`） |
 | POST | `/api/ai/tickets/{id}/draft-reply` | manager/admin | AI 起草审批意见 |
 | POST | `/api/ai/ask` | 登录 | AI 问答助手（可查工单数据） |
+
+**完整状态机**
+
+```
+pending ──approve──→ approved ──close──→ closed
+   └────reject────→ rejected          （rejected / closed 为终态，不可再流转）
+```
+
+动作由请求体的 `action` 指定，取值被 `Literal` 约束：写错的值会在入口被拦成 422，不会静默落库。
 
 ---
 
@@ -176,7 +210,6 @@ Authorization: Bearer <token>
 > | **未列举的未知角色** | 恒假条件 | **返回空（fail-closed）** |
 >
 > 想验证权限是否真的生效？用不同账号调同一接口，比较 `total` 与 `items` 的归属即可（差分验证）。
-
 ---
 
 ### 3.4 创建工单
@@ -208,10 +241,10 @@ Content-Type: application/json
 
 ---
 
-### 3.5 审批工单
+### 3.5 工单流转（审批 / 驳回 / 关闭）
 
 ```
-POST /api/tickets/{ticket_id}/approve
+POST /api/tickets/{ticket_id}/action
 Authorization: Bearer <manager 或 admin 的 token>
 Content-Type: application/json
 ```
@@ -219,16 +252,21 @@ Content-Type: application/json
 
 **请求体**
 
-| 字段 | 类型 | 必填 | 约束 |
+| 字段 | 类型 | 必填 | 取值 |
 |---|---|---|---|
-| `remark` | string | 否 | ≤200 字符，审批意见 |
+| `action` | string | 否 | `approve`（默认）/ `reject` / `close` |
+| `remark` | string | 否 | ≤200 字符，处理意见 |
+
+```json
+{ "action": "reject", "remark": "缺少发票，请补充后重新提交" }
+```
 
 **响应 200**
 ```json
 {
   "code": 0,
-  "message": "审批完成",
-  "data": { "id": 3, "action": "approve", "new_status": "approved" }
+  "message": "处理完成",
+  "data": { "id": 3, "action": "reject", "new_status": "rejected" }
 }
 ```
 
@@ -236,19 +274,77 @@ Content-Type: application/json
 
 | 状态码 | 场景 |
 |---|---|
-| 403 | 角色不是 manager/admin；或工单不属于本部门 |
+| 403 | 角色不是 manager/admin；工单不属于本部门；或试图处理自己提交的工单 |
 | 404 | 工单不存在 |
 | 400 | 当前状态不允许该动作（状态机拦截，例如对已通过的工单再审批） |
+| **409** | **并发冲突**：状态已被他人变更（乐观锁判定失败） |
+| 422 | `action` 取值非法（被 schema 拦在门口） |
 
-> 🔒 **本接口做了两层检查，缺一不可**
+> 🔒 **本接口做了三层检查，缺一不可**
 > 1. **功能权限**（路由层 `require_role`）：你的角色能不能按这个按钮 → 403
-> 2. **数据权限**（业务层部门比对）：这张单子归不归你管 → 403
+> 2. **数据权限**（业务层部门比对，admin 豁免）：这张单子归不归你管 → 403
+> 3. **独立性**（业务层）：不能处理自己提交的工单 → 403
 >
 > 只做第 1 层是很常见的安全缺陷——技术部主管将能审批财务部的工单。
+>
+> ⚙️ **并发保护**：更新语句把"当前状态"写进 WHERE 条件
+> （`UPDATE ... WHERE id=? AND status=?`），再用 `rowcount` 判定是否真的改到，
+> 避免"两个主管同时审批"导致重复处理与日志翻倍。
+
+> 兼容路径：`POST /api/tickets/{ticket_id}/approve` 等价于 `action=approve`，供既有前端与脚本使用。
 
 ---
 
-### 3.6 AI 起草审批意见
+### 3.6 查询工单详情
+
+```
+GET /api/tickets/{ticket_id}
+Authorization: Bearer <token>
+```
+
+**响应 200**
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "id": 3, "title": "报销差旅费", "content": "出差北京3天", "status": "pending",
+    "user_id": 1, "submitter": "zhangsan", "created_at": "2026-09-19 21:23:29"
+  }
+}
+```
+
+> 🔒 **越权与不存在都返回 404**，不告诉调用方"这条数据存在但你看不到"——
+> 否则攻击者可以用状态码差异（403 vs 404）枚举出系统里有哪些工单。
+
+---
+
+### 3.7 查询工单流转历史
+
+```
+GET /api/tickets/{ticket_id}/logs
+Authorization: Bearer <token>
+```
+
+**响应 200**
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    { "id": 1, "action": "submit",  "operator": "zhangsan", "remark": null,     "created_at": "2026-09-19 21:23:29" },
+    { "id": 5, "action": "approve", "operator": "lisi",     "remark": "同意",   "created_at": "2026-09-20 10:02:11" }
+  ]
+}
+```
+
+权限与详情接口一致：看不到工单就看不到它的日志。
+
+---
+
+---
+
+### 3.8 AI 起草审批意见
 
 ```
 POST /api/ai/tickets/{ticket_id}/draft-reply
@@ -277,7 +373,7 @@ Authorization: Bearer <manager 或 admin 的 token>
 
 ---
 
-### 3.7 AI 问答助手（Function Calling）
+### 3.9 AI 问答助手（Function Calling）
 
 ```
 POST /api/ai/ask

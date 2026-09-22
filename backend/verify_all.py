@@ -54,6 +54,7 @@ conn = sqlite3.connect(DB_PATH)
 conn.row_factory = sqlite3.Row
 
 # 追加一个"未知角色"用户，用于验证 fail-closed
+# （admin1 已在 bootstrap 的演示数据里，无需重复插入）
 conn.execute(
     """INSERT INTO users (username, password_hash, role, department, created_at)
        VALUES (?,?,?,?,?)""",
@@ -358,6 +359,140 @@ def _():
         assert tool_msgs and "未知工具" in tool_msgs[0]["content"]
     finally:
         llm_service.client = _orig_client
+
+
+print("\n=== [7] 状态机闭环与权限边界（本轮修复项）===")
+
+
+@check("驳回：pending --reject--> rejected")
+def _():
+    from services.ticket_service import act_on_ticket
+    tid = new_pending_ticket("zhangsan")
+    r = act_on_ticket(conn, tid, "reject", user("lisi"), "不符合规定")
+    assert r.new_status == "rejected"
+
+
+@check("关闭：approved --close--> closed")
+def _():
+    from services.ticket_service import act_on_ticket
+    tid = new_pending_ticket("zhangsan")
+    act_on_ticket(conn, tid, "approve", user("lisi"), "同意")
+    r = act_on_ticket(conn, tid, "close", user("lisi"), "已办结")
+    assert r.new_status == "closed"
+
+
+@check("终态不可再动：rejected 工单不能 close")
+def _():
+    from services.ticket_service import act_on_ticket
+    tid = new_pending_ticket("zhangsan")
+    act_on_ticket(conn, tid, "reject", user("lisi"), "驳回")
+    expect_biz_error(400, act_on_ticket, conn, tid, "close", user("lisi"), "再关")
+
+
+@check("不能处理自己提交的工单（独立性）")
+def _():
+    """lisi 以自己名义提单，再用主管身份批自己的单 —— 应被拒"""
+    from services.ticket_service import act_on_ticket
+    own = create_ticket(conn, TicketCreate(title="主管自己的单", content="x"), user("lisi"))
+    expect_biz_error(403, act_on_ticket, conn, own, "approve", user("lisi"), "自批")
+
+
+@check("admin 豁免部门限制，可以处理跨部门工单")
+def _():
+    from services.ticket_service import act_on_ticket
+    tid = new_pending_ticket("wangwu")          # 财务部
+    r = act_on_ticket(conn, tid, "approve", user("admin1"), "管理员处理")
+    assert r.new_status == "approved"
+
+
+@check("部门为空的用户不能处理任何工单（修掉 None != None 的 fail-open）")
+def _():
+    from services.ticket_service import act_on_ticket
+    # 造一个没有部门的经理
+    conn.execute(
+        """INSERT INTO users (username, password_hash, role, department, created_at)
+           VALUES (?,?,?,?,?)""",
+        ("nodept_mgr", hash_password("123456"), "manager", None, "2026-01-01 00:00:00"),
+    )
+    conn.commit()
+    mgr = dict(conn.execute(
+        "SELECT id, username, role, department FROM users WHERE username='nodept_mgr'"
+    ).fetchone())
+    # 再造一个没有部门的员工提交工单，制造 None == None 的危险场景
+    conn.execute(
+        """INSERT INTO users (username, password_hash, role, department, created_at)
+           VALUES (?,?,?,?,?)""",
+        ("nodept_emp", hash_password("123456"), "employee", None, "2026-01-01 00:00:00"),
+    )
+    conn.commit()
+    emp = dict(conn.execute(
+        "SELECT id, username, role, department FROM users WHERE username='nodept_emp'"
+    ).fetchone())
+    tid = create_ticket(conn, TicketCreate(title="无部门员工的单", content="x"), emp)
+    expect_biz_error(403, act_on_ticket, conn, tid, "approve", mgr, "无部门互批")
+
+
+@check("工单详情：越权与不存在都返回 404（防资源枚举）")
+def _():
+    from services.ticket_service import get_ticket
+    tid = new_pending_ticket("wangwu")                     # 财务部的单
+    wid = get_ticket(conn, tid, user("wangwu")).id         # 本人可以看
+    assert wid == tid
+    expect_biz_error(404, get_ticket, conn, tid, user("lisi"))      # 跨部门 → 404 而非 403
+    expect_biz_error(404, get_ticket, conn, 999999, user("lisi"))   # 不存在 → 404
+
+
+@check("流转日志可查，且能看到操作人")
+def _():
+    from services.ticket_service import act_on_ticket, list_ticket_logs
+    tid = new_pending_ticket("zhangsan")
+    act_on_ticket(conn, tid, "approve", user("lisi"), "同意办理")
+    logs = list_ticket_logs(conn, tid, user("zhangsan"))
+    actions = [l.action for l in logs]
+    assert actions[0] == "submit", f"第一条应为 submit，实际 {actions}"
+    assert "approve" in actions
+    assert any(l.operator == "lisi" and l.remark == "同意办理" for l in logs)
+
+
+@check("并发审批：只有一个成功，且不产生重复日志（TOCTOU 修复）")
+def _():
+    import sqlite3 as _s3
+    import threading
+
+    from services.ticket_service import act_on_ticket as _act
+
+    tid = new_pending_ticket("zhangsan")
+    operator = user("lisi")          # ★ 必须在主线程取好：sqlite3 连接不能跨线程使用
+    outcomes = []
+    barrier = threading.Barrier(2)
+
+    def worker():
+        c = _s3.connect(DB_PATH, timeout=10)
+        c.row_factory = _s3.Row
+        c.execute("PRAGMA busy_timeout = 10000")
+        try:
+            barrier.wait(timeout=5)          # 让两个线程尽量同时冲进去
+            _act(c, tid, "approve", operator, "并发审批")
+            outcomes.append("ok")
+        except Exception as exc:             # noqa: BLE001
+            outcomes.append(type(exc).__name__)
+        finally:
+            c.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    approve_logs = conn.execute(
+        "SELECT COUNT(*) AS c FROM ticket_logs WHERE ticket_id = ? AND action = 'approve'",
+        (tid,),
+    ).fetchone()["c"]
+    assert approve_logs == 1, (
+        f"并发审批应只写 1 条日志，实际 {approve_logs} 条（两次结果：{outcomes}）"
+        " —— 说明存在 TOCTOU 竞态"
+    )
 
 
 # ══════════════════════════════════════════════

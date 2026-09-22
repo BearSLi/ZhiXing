@@ -25,12 +25,13 @@
 
 | 模块 | 能力 |
 |---|---|
-| 认证 | 登录换取 JWT；密码 bcrypt 哈希存储；认证失败信息不可区分（防用户名枚举） |
-| 授权 | 角色门禁（功能权限）+ 行级数据范围（数据权限），**默认拒绝** |
-| 工单 | 创建 / 列表（分页、状态筛选）/ 审批，带状态机校验与流转日志 |
-| AI 起草 | 主管请求 AI 为待审批工单生成审批意见（提示词模板化） |
+| 认证 | 登录换取 JWT；密码 bcrypt 哈希存储；认证失败信息不可区分（防用户名枚举）；密钥缺失则拒绝启动 |
+| 授权 | 角色门禁（功能权限）+ 行级数据范围（数据权限），**默认拒绝**；admin 豁免部门限制 |
+| 工单 | 创建 / 详情 / 列表（分页、状态筛选）/ 流转日志 / 流转动作（**通过 · 驳回 · 关闭**），带状态机校验与并发保护 |
+| AI 起草 | 主管请求 AI 为待审批工单生成审批意见（提示词模板化 + 数据/指令分隔防注入） |
 | AI 问答 | Function Calling 让 AI 查询工单数据，**查询范围恒等于提问者自身权限** |
 | 前端 | 登录 → 自动带 token 请求 → 列表渲染，含 XSS 转义与 401 统一处理 |
+| 错误契约 | 所有响应（成功与失败）统一为 `{code, message, data}` 信封；全局异常处理器 |
 | 交付 | Docker 镜像 + 一键脚本 + 幂等数据库初始化 + 部署文档 |
 
 ---
@@ -130,6 +131,7 @@ LLM_MODEL=deepseek-chat
 | `zhangsan` | `123456` | employee | 技术部 | 仅自己提交的 |
 | `lisi` | `123456` | manager | 技术部 | 本部门全部 |
 | `wangwu` | `123456` | finance | 财务部 | 仅自己提交的 |
+| `admin1` | `123456` | admin | 管理部 | 全部（且可跨部门处理） |
 
 > 用不同账号登录同一页面，看到的工单列表不同——这是数据权限的直观演示。
 
@@ -210,8 +212,41 @@ Function Calling 的工具执行复用 `list_tickets`，强制经过 `apply_scop
 ### 5. 资源生命周期收敛到一处
 
 数据库连接由 `get_db()` 的 yield 依赖统一创建与释放，业务层与路由层均不手动 `close()`。
+连接建立时统一加固：`foreign_keys=ON`（SQLite 默认不强制外键约束）、`journal_mode=WAL`、`busy_timeout=5000`。
 
-### 6. 可替换的模型适配层
+### 6. 状态机 + 并发保护
+
+```python
+ALLOWED_TRANSITIONS = {
+    "pending":  {"approve", "reject"},
+    "approved": {"close"},
+    "rejected": set(),      # 终态
+    "closed":   set(),      # 终态
+}
+```
+
+流转不用"先 SELECT 判断、再 UPDATE"——那样两个并发请求可能都读到 `pending`、
+都通过检查、都写日志（TOCTOU 竞态）。而是把状态写进 WHERE 条件：
+
+```python
+cur = conn.execute("UPDATE tickets SET status=? WHERE id=? AND status=?", ...)
+if cur.rowcount != 1:
+    raise ConflictError("工单状态已被他人变更，请刷新后重试")   # 409
+```
+
+由数据库保证"只有一个人能改成功"。`verify_all.py` 里有一个**真实的两线程并发用例**验证这一点。
+
+### 7. 统一错误契约
+
+成功与失败都走同一种信封，前端只需实现一次错误处理：
+
+```json
+{ "code": 403, "message": "只能处理本部门的工单", "detail": "只能处理本部门的工单", "data": null }
+```
+
+`detail` 字段保留是为了向后兼容既有前端与脚本（契约演进策略：新字段先加，旧字段留一版再删）。
+
+### 8. 可替换的模型适配层
 
 `llm_service` 是唯一与模型供应商打交道的地方。换模型只改 `.env` 三行：
 
@@ -227,10 +262,14 @@ LLM_MODEL=glm-4-flash
 ```powershell
 cd backend
 
-python verify_all.py            # 零依赖回归验证（20 项，无需安装任何东西）
+python verify_all.py            # 零依赖回归验证（29 项，service 层，无需安装任何东西）
 
 python -m pip install pytest httpx
-python -m pytest                # pytest 套件（需 httpx）
+python -m pytest                # pytest 套件（HTTP 层，需 httpx）
+
+python http_check.py            # HTTP 契约验收（16 项，需服务已启动）
+#   python -m uvicorn main:app --port 8001
+#   python http_check.py http://127.0.0.1:8001
 
 .\test.ps1                      # 接口冒烟：服务存活 + 多身份对照 + AI 验收
 ```
@@ -244,6 +283,11 @@ python -m pytest                # pytest 套件（需 httpx）
 | `test_approve_cross_department_forbidden` | 只做功能权限、漏做数据权限 |
 | `test_ask_with_tool_call_and_complete_history` | Function Calling 工具调用历史缺环 |
 | `test_draft_reply_permission_checked_before_llm_call` | 权限校验晚于模型调用（数据提前出境） |
+| `test_rejected_is_terminal` | 状态机只有半张表（reject/close 无法到达） |
+| `test_cannot_act_on_own_ticket` | 主管可以审批自己提交的工单 |
+| `test_admin_exempt_from_department_check` | 管理员被数据权限挡在门外（功能权限与数据权限不自洽） |
+| 并发审批用例（verify_all [7]） | 先查后改导致的 TOCTOU 竞态（重复审批 + 日志翻倍） |
+| HTTP 校验用例（http_check） | 自定义校验器异常导致 422 被兜底成 500 |
 
 ---
 

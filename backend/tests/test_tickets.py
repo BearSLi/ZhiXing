@@ -28,7 +28,7 @@ def test_manager_sees_department_tickets(client, auth):
     resp = client.get("/api/tickets?size=50", headers=auth("lisi"))
     items = resp.json()["data"]["items"]
     assert len(items) >= 2, "技术部应有工单"
-    assert all(t["submitter"] == "zhangsan" for t in items), "主管只能看到本部门（技术部）的工单"
+    assert all(t["submitter"] in {"zhangsan", "lisi"} for t in items), "主管只能看到本部门（技术部）的工单"
 
 
 def test_finance_sees_only_own_tickets(client, auth):

@@ -26,6 +26,7 @@ DEMO_USERS = [
     ("zhangsan", "employee", "技术部"),
     ("lisi",     "manager",  "技术部"),
     ("wangwu",   "finance",  "财务部"),
+    ("admin1",   "admin",    "管理部"),      # 演示"看全部"的角色，同时验证 admin 豁免部门检查
 ]
 
 SCHEMA = [
@@ -66,6 +67,13 @@ SCHEMA = [
       FOREIGN KEY (operator_id) REFERENCES users(id)
     )
     """,
+    # ── 索引：加在"高频出现在 WHERE / JOIN / ORDER BY 的字段"上 ──
+    # 权限过滤按 user_id、状态筛选按 status、软删除按 is_deleted、
+    # 日志关联按 ticket_id —— 这四个是当前查询的主要入口
+    "CREATE INDEX IF NOT EXISTS idx_tickets_user    ON tickets(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tickets_status  ON tickets(status)",
+    "CREATE INDEX IF NOT EXISTS idx_tickets_deleted ON tickets(is_deleted)",
+    "CREATE INDEX IF NOT EXISTS idx_logs_ticket     ON ticket_logs(ticket_id)",
 ]
 
 
@@ -135,7 +143,10 @@ def main():
         print(f"[bootstrap] 已为 {fixed} 个演示账号设置密码：{DEMO_PASSWORD}")
 
     conn.close()
-    print("[bootstrap] 完成。演示账号：zhangsan(员工) / lisi(主管) / wangwu(财务)，密码均为 123456")
+    print(
+        "[bootstrap] 完成。演示账号：zhangsan(员工) / lisi(主管) / "
+        f"wangwu(财务) / admin1(管理员)，密码均为 {DEMO_PASSWORD}"
+    )
 
 
 if __name__ == "__main__":

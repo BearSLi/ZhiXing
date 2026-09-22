@@ -31,6 +31,7 @@ USERS = [
     ("lisi",     "manager",  "技术部"),
     ("wangwu",   "finance",  "财务部"),
     ("auditor1", "auditor",  "审计部"),
+    ("admin1",   "admin",    "管理部"),
 ]
 
 # (title, content, status, user_id)
