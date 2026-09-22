@@ -154,22 +154,44 @@ print("\n=== [2] 数据权限矩阵（BUG-13 回归）===")
 
 @check("员工：只看到自己的工单")
 def _():
+    uid = user("zhangsan")["id"]
     r = list_tickets(conn, viewer=user("zhangsan"), size=50)
     assert r.total >= 1
-    assert all(i.user_id == 1 for i in r.items)
+    assert all(i.user_id == uid for i in r.items)
 
 
-@check("主管：看到本部门（技术部）工单")
+@check("同部门两个员工：互相看不到对方的工单")
 def _():
-    r = list_tickets(conn, viewer=user("lisi"), size=50)
-    assert r.total >= 1
-    assert all(i.submitter == "zhangsan" for i in r.items)
+    """演示数据刻意在技术部放了两个员工，这条断言保证这种差异真实存在"""
+    a = user("zhangsan")
+    b = user("zhaoliu")
+    assert a["department"] == b["department"], "本用例要求两人同部门"
+    seen_a = {i.id for i in list_tickets(conn, viewer=a, size=50).items}
+    seen_b = {i.id for i in list_tickets(conn, viewer=b, size=50).items}
+    assert seen_a and seen_b, "两个员工都应各有工单"
+    assert not (seen_a & seen_b), f"同部门员工不应看到对方的工单，交集={seen_a & seen_b}"
+
+
+@check("主管：看到本部门全部，且多于任何单个员工")
+def _():
+    tech_dept = {"zhangsan", "zhaoliu", "lisi"}
+    mgr = list_tickets(conn, viewer=user("lisi"), size=50)
+    emp = list_tickets(conn, viewer=user("zhangsan"), size=50)
+    assert all(i.submitter in tech_dept for i in mgr.items), "主管只能看到本部门成员提交的工单"
+    assert mgr.total > emp.total, f"主管({mgr.total}) 应多于单个员工({emp.total})"
+    # 主管看到的集合应等于本部门所有员工可见集合的并集
+    union = set()
+    for name in ("zhangsan", "zhaoliu", "lisi"):
+        union |= {i.id for i in list_tickets(conn, viewer=user(name), size=50).items}
+    assert {i.id for i in mgr.items} == union, "主管可见范围应等于本部门成员的并集"
 
 
 @check("财务：当前策略下只看到自己的")
 def _():
+    uid = user("wangwu")["id"]
     r = list_tickets(conn, viewer=user("wangwu"), size=50)
-    assert all(i.user_id == 3 for i in r.items)
+    assert r.total >= 1
+    assert all(i.user_id == uid for i in r.items)
 
 
 @check("未知角色：默认拒绝（fail-closed，看不到任何数据）")
@@ -181,10 +203,14 @@ def _():
 @check("差分断言：不同身份看到的集合不同")
 def _():
     seen = {u: {i.id for i in list_tickets(conn, viewer=user(u), size=50).items}
-            for u in ("zhangsan", "lisi", "wangwu", "auditor1")}
+            for u in ("zhangsan", "zhaoliu", "lisi", "wangwu", "auditor1")}
+    assert seen["zhangsan"] != seen["zhaoliu"], "同部门两个员工不应看到同一批数据"
     assert seen["zhangsan"] != seen["wangwu"]
     assert seen["auditor1"] == set()
     assert seen["lisi"] >= seen["zhangsan"]
+    assert seen["lisi"] >= seen["zhaoliu"]
+    # 主管看不到其他部门的单子
+    assert not (seen["lisi"] & seen["wangwu"]), "跨部门数据不应出现在主管的可见集合里"
 
 
 print("\n=== [3] 创建工单：身份只认传入的用户 ===")
@@ -192,9 +218,10 @@ print("\n=== [3] 创建工单：身份只认传入的用户 ===")
 
 @check("创建后 user_id 等于提交者（不来自请求体）")
 def _():
-    tid = create_ticket(conn, TicketCreate(title="身份验证单", content="x"), user("wangwu"))
+    owner = user("wangwu")
+    tid = create_ticket(conn, TicketCreate(title="身份验证单", content="x"), owner)
     row = conn.execute("SELECT user_id FROM tickets WHERE id = ?", (tid,)).fetchone()
-    assert row["user_id"] == 3, f"工单归属错误：{row['user_id']}"
+    assert row["user_id"] == owner["id"], f"工单归属错误：{row['user_id']} != {owner['id']}"
 
 
 @check("创建同时写入流转日志（审计不断档）")
