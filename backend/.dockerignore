@@ -21,10 +21,15 @@ venv/
 # ── 开发调试脚本（不需要在生产镜像里）──
 debug_*.py
 verify_fixes.py
+verify_all.py
+http_check.py
 check_app.py
 explore_http.py
 test.ps1
 tests/
+conftest.py
+pytest.ini
+.pytest_cache/
 
 # ── 编辑器/系统杂物 ──
 .vscode/
