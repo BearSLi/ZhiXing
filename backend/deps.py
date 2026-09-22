@@ -9,9 +9,6 @@ from typing import Optional
 # tokenUrl：告诉 /docs "去哪个接口拿 token"，这样 /docs 页面会自动出现 Authorize 按钮
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-class ApproveRequest(BaseModel):
-    remark: Optional[str] = Field(None, max_length=200)
-
 def get_current_user(token: str = Depends(oauth2_scheme), conn=Depends(get_db)):
     # ① 没带 Authorization 头 → OAuth2PasswordBearer 已经自动抛 401，到不了这里
 

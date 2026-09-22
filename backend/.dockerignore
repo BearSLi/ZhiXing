@@ -1,0 +1,33 @@
+# ===== 不进 Docker 镜像的东西 =====
+# 作用：1) 减小构建上下文（更快） 2) 防止密钥/数据泄漏进镜像
+
+# ── 密钥与配置（必须排除！镜像会被分发，等同公开）──
+.env
+.env.*
+
+# ── 运行时数据（数据库是"有状态数据"，不该打进镜像）──
+app.db
+*.db
+*.sqlite3
+data/
+
+# ── Python 缓存 ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 开发调试脚本（不需要在生产镜像里）──
+debug_*.py
+verify_fixes.py
+check_app.py
+explore_http.py
+test.ps1
+tests/
+
+# ── 编辑器/系统杂物 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

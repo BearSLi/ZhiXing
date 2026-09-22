@@ -17,13 +17,18 @@ class BizError(Exception):
         self.code = code
 
 def apply_scope(where: str, params: list, viewer: dict) -> tuple[str, list]:
-    """统一的行级权限入口：任何查询工单的 SQL，先过这里加数据范围。
-    返回加好权限条件的 (where, params)。开发者不需要知道规则是什么。"""
-    if viewer["role"] == "employee":
-        return where + " AND t.user_id = ?", params + [viewer["id"]]
-    if viewer["role"] == "manager":
+    """统一的行级权限入口。白名单授权 + 默认拒绝（fail-closed）。"""
+    role = viewer["role"]
+
+    if role == "admin":
+        return where, params                                            # 显式授权：看全部
+    if role == "manager":
         return where + " AND u.department = ?", params + [viewer["department"]]
-    return where, params          # admin：不加条件
+    if role in ("employee", "finance"):
+        return where + " AND t.user_id = ?", params + [viewer["id"]]     # 只看自己的
+
+    # ★ 未知角色：默认拒绝。宁可看不到，不可看多了。
+    return where + " AND 1 = 0", params
 
 def list_tickets(conn, viewer, status=None, page=1, size=20):
     where = "WHERE t.is_deleted = 0"

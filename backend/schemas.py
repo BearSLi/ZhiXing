@@ -5,6 +5,10 @@ from pydantic import BaseModel, Field
 
 T = TypeVar("T")
 
+class ApproveRequest(BaseModel):
+    remark: Optional[str] = Field(None, max_length=200)
+
+
 #请求模型
 class TicketCreate(BaseModel):
     title: str = Field(..., min_length = 1, max_length = 100, description= "工单标题")

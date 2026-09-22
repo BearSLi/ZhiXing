@@ -1,0 +1,42 @@
+# ============================================================
+#  .gitignore —— 哪些文件永远不进版本库
+#  原则：密钥不进、运行时数据不进、编译缓存不进
+#  注意：.gitignore 只防"未来"，已被追踪的文件要先 git rm --cached
+# ============================================================
+
+# ── 密钥与本地配置（最高优先级：泄露即事故）──
+.env
+.env.*
+backend/.env
+backend/.env.*
+!.env.example
+!backend/.env.example
+
+# ── 运行时数据（数据库是"有状态数据"，不是代码）──
+*.db
+*.db-journal
+*.sqlite3
+data/
+backend/app.db
+
+# ── Python 编译产物与虚拟环境 ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ── 编辑器与操作系统杂物 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 日志与临时文件 ──
+*.log
+*.tmp
+*.bak

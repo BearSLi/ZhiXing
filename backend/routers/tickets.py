@@ -3,16 +3,13 @@ from deps import get_current_user, require_role
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from database import get_db
-from schemas import TicketCreate
+from schemas import TicketCreate, ApproveRequest
 from services import ticket_service
 from services.ticket_service import BizError
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tickets", tags = ["工单"])
-
-class ApproveRequest(BaseModel):
-    remark: Optional[str] = Field(None, max_length=200)
 
 #统一响应格式的包装器
 def ok(data=None, message="ok"):
